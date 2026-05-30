@@ -14,6 +14,7 @@
 - [Anti-Debug & Evasion](#anti-debug--evasion)
 - [Encryption Scheme](#encryption-scheme)
 - [Payload Breakdown](#payload-breakdown)
+- [C2 Server Status](#c2-server-status)
 - [Complete Capabilities Matrix](#complete-capabilities-matrix)
 - [Indicators of Compromise (IOCs)](#indicators-of-compromise-iocs)
 - [YARA Rule](#yara-rule)
@@ -445,6 +446,50 @@ CoCreateInstance(&clsid, NULL, CLSCTX_INPROC_SERVER, &iid, &pObj);
 
 ---
 
+## C2 Server Status
+
+| Item | Status |
+|------|--------|
+| **C2 Server URL/IP** | **UNRECOVERED** — encrypted inside XOR blob in Payload 105 |
+| **XOR Key (found)** | `B?1TRC1LICTJ/=/J.RQKU./J.J><>FR.ANTI21SK/MTU/G/HF/.IH?P<` (56 bytes) |
+| **Config Location** | Payload 105, embedded PE at offset 69,760 (0x11080) |
+| **Decryption Method** | XOR each byte of config blob with repeating XOR key above |
+| **C2 Protocol** | HTTP/HTTPS via WinINet API (Payload 106) |
+| **Beacon** | `POST /beacon` — system info (hostname, user, OS) |
+| **Exfiltration** | `POST /data` — stolen credentials |
+| **Commands** | `GET /<path>` — regex-parsed commands |
+| **Update** | `GET /update` — download new config/payloads |
+
+### Why the C2 address is missing
+
+The C2 server URL/IP was **XOR-encrypted** inside the 2.5 MB `.data` section of **Payload 105** (the x86 GCC/MinGW downloader). This is the only x86 payload and contains an embedded PE at offset 69,760 with the encrypted configuration.
+
+The XOR key was extracted from the binary's `.rdata` section:
+```
+B?1TRC1LICTJ/=/J.RQKU./J.J><>FR.ANTI21SK/MTU/G/HF/.IH?P<
+```
+
+To recover the C2 address, the original file is needed to:
+1. RC4-decrypt Payload 105 from the master binary
+2. Extract the XOR-encrypted blob at offset 69,760
+3. XOR-decode using the key above
+
+**Without the original binary, the C2 server address is permanently unrecoverable** from the remaining source code files (they contain only `.text` section disassembly, not `.data` section content).
+
+### What can still be reported to your company
+
+Even without the live C2 address, the following C2 intelligence is documented:
+
+- **Protocol:** HTTP/HTTPS (not raw TCP, not DNS tunneling)
+- **API:** WinINet (`InternetOpenA` → `InternetConnectA` → `HttpOpenRequestA` → `HttpSendRequestA` → `InternetReadFile`)
+- **User Agent:** Custom (inside encrypted config)
+- **Port:** Configurable (inside encrypted config)
+- **Command Parsing:** Full regex engine (20 functions) for server response parsing
+- **Payload type:** Standard PE executables (not shellcode)
+- **Exfiltration format:** Stolen credentials formatted for HTTP POST
+
+---
+
 ## Complete Capabilities Matrix
 
 | Capability | Payload(s) | Technique |
@@ -540,18 +585,28 @@ HKCU\Software\Classes\ms-settings\shell\open\command
 
 ### Network IOCs
 
-```
-Protocol:  HTTP/HTTPS via WinINet API
-User Agent: (custom — in encrypted config)
-Port:      (configurable — in XOR config blob)
+| Indicator | Value |
+|-----------|-------|
+| **C2 Server** | `UNKNOWN` (XOR-encrypted in Payload 105 config blob) |
+| **Protocol** | HTTP/HTTPS via WinINet API |
+| **C2 API** | `InternetOpenA` → `InternetConnectA` → `HttpOpenRequestA` → `HttpSendRequestA` → `InternetReadFile` |
+| **User Agent** | Custom (in encrypted config) |
+| **Port** | Configurable (in XOR config blob) |
 
-Beacon:    POST /beacon (system info)
-Exfil:     POST /data   (stolen credentials)
-Update:    GET  /update (new config/payload)
-Commands:  GET  /<path> (regex-parsed commands)
-
-XOR Key:   B?1TRC1LICTJ/=/J.RQKU./J.J><>FR.ANTI21SK/MTU/G/HF/.IH?P<
+**C2 Endpoints:**
 ```
+Beacon:    POST /beacon (system_info)
+Exfil:     POST /data   (stolen_credentials)
+Commands:  GET  /<path> (server_response parsed via regex engine)
+Update:    GET  /update (download_new_payload)
+```
+
+**XOR Encryption Key (for config blob at offset 69,760 of Payload 105):**
+```
+B?1TRC1LICTJ/=/J.RQKU./J.J><>FR.ANTI21SK/MTU/G/HF/.IH?P<
+```
+
+> **Note:** The C2 server address is unrecoverable without the original binary. See [C2 Server Status](#c2-server-status) section for details.
 
 ### Mutex IOCs
 
